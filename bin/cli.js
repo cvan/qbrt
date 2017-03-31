@@ -37,7 +37,7 @@ const installDir = path.join(distDir, process.platform === 'darwin' ? 'Runtime.a
 const validCommands = [ null, 'package', 'run', 'help' ];
 const { command, argv } = commandLineCommands(validCommands);
 
-switch(command) {
+switch (command) {
   case 'package':
     packageApp();
     break;
@@ -55,7 +55,7 @@ switch(command) {
 function runApp() {
   const optionDefinitions = [
     { name: 'jsdebugger', type: Boolean },
-    { name: 'path', type: String, defaultOption: true },
+    { name: 'path', type: String, defaultOption: true, defaultValue: argv[0] || process.cwd() },
     { name: 'wait-for-jsdebugger', type: Boolean },
   ];
   const options = commandLineArgs(optionDefinitions, { argv: argv });
@@ -69,7 +69,7 @@ function runApp() {
   const shellDir = path.join(__dirname, '..', 'shell');
   const appDir = fs.existsSync(options.path) ? path.resolve(options.path) : shellDir;
   const appPackageJson = require(path.join(appDir, 'package.json'));
-  const mainEntryPoint = path.join(appDir, appPackageJson.main);
+  const mainEntryPoint = path.join(appDir, appPackageJson.main || 'index.js');
 
   // Args like 'app', 'new-instance', and 'profile' are handled by nsAppRunner,
   // which supports uni-dash (-foo), duo-dash (--foo), and slash (/foo) variants
@@ -94,8 +94,12 @@ function runApp() {
     executableArgs.push(options.path);
   }
 
-  options.jsdebugger && executableArgs.push('-jsdebugger');
-  options['wait-for-jsdebugger'] && executableArgs.push('-wait-for-jsdebugger');
+  if (options.jsdebugger) {
+    executableArgs.push('-jsdebugger');
+  }
+  if (options['wait-for-jsdebugger']) {
+    executableArgs.push('-wait-for-jsdebugger');
+  }
 
   const child = spawn(executable, executableArgs, { stdio: 'inherit' });
   child.on('close', code => {
@@ -111,7 +115,7 @@ function runApp() {
 
 function packageApp() {
   const optionDefinitions = [
-    { name: 'path', type: String, defaultOption: true },
+    { name: 'path', type: String, defaultOption: true, defaultValue: argv[0] || process.cwd() },
   ];
   const options = commandLineArgs(optionDefinitions, { argv: argv });
   const shellDir = path.join(__dirname, '..', 'shell');
@@ -220,7 +224,6 @@ function displayHelp() {
     { name: 'wait-for-jsdebugger', type: Boolean, group: 'run', description: 'Pause the runtime at startup until the runtime toolbox connects.' },
   ];
 
-
   const sections = [
     {
       header: 'qbrt',
@@ -261,7 +264,7 @@ function displayHelp() {
       ],
     },
     {
-      content: 'Project home: [underline]{https://github.com/mozilla/qbrt}',
+      content: `Project home: [underline]{${packageJson.homepage}}`,
     },
   ];
 
