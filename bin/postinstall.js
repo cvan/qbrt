@@ -30,6 +30,7 @@ const plist = require('simple-plist');
 const postinstallXULApp = require('./postinstall-xulapp');
 const spawn = require('child_process').spawn;
 
+const DOWNLOAD_LOCALE = 'en-US';
 const DOWNLOAD_OS = (() => {
   switch (process.platform) {
     case 'win32':
@@ -55,11 +56,29 @@ const DOWNLOAD_OS = (() => {
   }
 })();
 
-const DOWNLOAD_URL = `https://download.mozilla.org/?product=firefox-nightly-latest-ssl&lang=en-US&os=${DOWNLOAD_OS}`;
+// TODO: Move these JSON files to a remote location hosted on a server.
+const DOWNLOAD_INFO_URLS = {
+  linux: `https://archive.mozilla.org/pub/firefox/nightly/2017/04/2017-04-02-10-01-59-mozilla-central/firefox-55.0a1.${DOWNLOAD_LOCALE}.linux-i686.json`,
+  linux64: `https://archive.mozilla.org/pub/firefox/nightly/2017/04/2017-04-02-10-01-59-mozilla-central/firefox-55.0a1.${DOWNLOAD_LOCALE}.linux-x86_64.json`,
+  osx: `https://archive.mozilla.org/pub/firefox/nightly/2017/04/2017-04-02-03-02-02-mozilla-central/firefox-55.0a1.${DOWNLOAD_LOCALE}.mac.json`,
+  win: `https://archive.mozilla.org/pub/firefox/nightly/2017/04/2017-04-02-03-02-02-mozilla-central/firefox-55.0a1.${DOWNLOAD_LOCALE}.win32.json`,
+  win64: `https://archive.mozilla.org/pub/firefox/nightly/2017/04/2017-04-02-03-02-02-mozilla-central/firefox-55.0a1.${DOWNLOAD_LOCALE}.win64.json`,
+};
+const DOWNLOAD_INFO_URL = DOWNLOAD_INFO_URLS[DOWNLOAD_OS];
+const DOWNLOAD_BIN_URLS = {
+  linux: `https://archive.mozilla.org/pub/firefox/nightly/2017/04/2017-04-02-10-01-59-mozilla-central/firefox-55.0a1.${DOWNLOAD_LOCALE}.linux-i686.tar.bz2`,
+  linux64: `https://archive.mozilla.org/pub/firefox/nightly/2017/04/2017-04-02-10-01-59-mozilla-central/firefox-55.0a1.${DOWNLOAD_LOCALE}.linux-x86_64.tar.bz2`,
+  mac: `https://archive.mozilla.org/pub/firefox/nightly/2017/04/2017-04-02-03-02-02-mozilla-central/firefox-55.0a1.${DOWNLOAD_LOCALE}.mac.dmg`,
+  win: `https://archive.mozilla.org/pub/firefox/nightly/2017/04/2017-04-02-03-02-02-mozilla-central/firefox-55.0a1.${DOWNLOAD_LOCALE}.win32.installer.exe`,
+  win64: `https://archive.mozilla.org/pub/firefox/nightly/2017/04/2017-04-02-03-02-02-mozilla-central/firefox-55.0a1.${DOWNLOAD_LOCALE}.win64.installer.exe`,
+};
+const DOWNLOAD_URL = DOWNLOAD_BIN_URLS[DOWNLOAD_OS] || `https://download.mozilla.org/?product=firefox-nightly-latest-ssl&lang=${DOWNLOAD_LOCALE}&os=${DOWNLOAD_OS}`;
+
 const distDir = path.join(__dirname, '..', 'dist', process.platform);
 const installDir = path.join(distDir, process.platform === 'darwin' ? 'Runtime.app' : 'runtime');
 const resourcesDir = process.platform === 'darwin' ? path.join(installDir, 'Contents', 'Resources') : installDir;
 const executableDir = process.platform === 'darwin' ? path.join(installDir, 'Contents', 'MacOS') : installDir;
+const runtimeInfo = path.join(distDir, 'runtime-info.json');
 const browserJAR = path.join(resourcesDir, 'browser', 'omni.ja');
 
 const FILE_EXTENSIONS = {
@@ -68,16 +87,72 @@ const FILE_EXTENSIONS = {
   'application/x-tar': 'tar.bz2',
 };
 
-cli.spinner('  Installing runtime…');
+cli.spinner('  Setting up runtime…');
 
 fs.ensureDirSync(distDir);
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `${packageJson.name}-`));
 const mountPoint = path.join(tempDir, 'volume');
 
+let currentBrowserInfo = {};
 let filePath;
 let fileStream;
 
 new Promise((resolve, reject) => {
+  cli.spinner('  Checking runtime…');
+
+  if (DOWNLOAD_INFO_URL) {
+    fs.readFile(runtimeInfo, (error, data) => {
+      if (error) {
+        resolve(false);
+      }
+
+      const oldFirefoxInfo = JSON.parse(data || '{}');
+
+      https.get(DOWNLOAD_INFO_URL, function(response) {
+        currentBrowserInfo = {};
+        try {
+          currentBrowserInfo = JSON.parse(response);
+        } catch (e) {
+          reject(e);
+          return;
+        }
+
+        if (currentBrowserInfo.buildid === oldFirefoxInfo.buildid &&
+            currentBrowserInfo.target_alias === oldFirefoxInfo.target_alias) {
+          resolve(true);
+          return;
+        }
+
+        // Continue to download.
+        resolve();
+      }).on('error', reject);
+    });
+  }
+  else {
+    resolve();
+  }
+})
+.then((isRuntimeUpToDate) => {
+  if (isRuntimeUpToDate) {
+    cli.spinner(chalk.green.bold('✓ ') + `Checking runtime… done! Already using latest version (build ID: ${currentBrowserInfo.buildid}; platform: ${currentBrowserInfo.target_alias}).`,
+      currentBrowserInfo, true);
+    return Promise.resolve();
+  }
+  else {
+    cli.spinner(chalk.green.bold('✓ ') + `Checking runtime… done! New version available for download (build ID: ${currentBrowserInfo.buildid}; platform: ${currentBrowserInfo.target_alias}).`,
+      currentBrowserInfo, true);
+    return downloadRuntime();
+  }
+})
+.then(installRuntime)
+.catch(error => {
+  cli.spinner(chalk.red.bold('✗ ') + 'Checking runtime… failed!', true);
+  console.error(`  Error: ${error}`);
+});
+
+var downloadRuntime = () => new Promise((resolve, reject) => {
+  cli.spinner('  Downloading runtime…');
+
   function download(url) {
     https.get(url, function(response) {
       if (response.headers.location) {
@@ -104,11 +179,28 @@ new Promise((resolve, reject) => {
   response.pipe(fileStream);
 
   return new Promise((resolve, reject) => {
-    fileStream.on('finish', resolve);
+    fileStream.on('finish', () => {
+      if (currentBrowserInfo) {
+        fs.writeFile(runtimeInfo, JSON.stringify(currentBrowserInfo, null, 2) + '\n');
+      }
+      resolve();
+    });
     response.on('error', reject);
   });
+}).then(() => {
+  cli.spinner(chalk.green.bold('✓ ') + 'Downloading runtime… done!', true);
 })
-.then(() => {
+.catch(error => {
+  cli.spinner(chalk.red.bold('✗ ') + 'Downloading runtime… failed!', true);
+  console.error(`  Error: ${error}`);
+  if (fileStream) {
+    fileStream.end();
+  }
+});
+
+var installRuntime = new Promise(() => {
+  cli.spinner('  Installing runtime…');
+
   if (process.platform === 'win32') {
     const source = filePath;
     const destination = distDir;
@@ -239,10 +331,10 @@ new Promise((resolve, reject) => {
   }
 })
 .then(() => {
-  cli.spinner(chalk.green.bold('✓ ') + 'Installing runtime… done!', true);
+  cli.spinner(chalk.green.bold('✓ ') + 'Setting up runtime… done!', true);
 })
 .catch(error => {
-  cli.spinner(chalk.red.bold('✗ ') + 'Installing runtime… failed!', true);
+  cli.spinner(chalk.red.bold('✗ ') + 'Setting up runtime… failed!', true);
   console.error(`  Error: ${error}`);
   if (fileStream) {
     fileStream.end();

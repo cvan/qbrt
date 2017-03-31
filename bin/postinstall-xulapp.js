@@ -21,10 +21,14 @@ const cli = require('cli');
 const fs = require('fs-extra');
 const path = require('path');
 const pify = require('pify');
+const request = require('request');
 
+const OPENVR_ENABLED = true;
+const OPENVR_URL = 'https://github.com/ValveSoftware/openvr/raw/v1.0.6/bin/win64/openvr_api.dll';
 const distDir = path.join(__dirname, '..', 'dist', process.platform);
 const installDir = path.join(distDir, process.platform === 'darwin' ? 'Runtime.app' : 'runtime');
 const resourcesDir = process.platform === 'darwin' ? path.join(installDir, 'Contents', 'Resources') : installDir;
+const openvrPath = path.join(resourcesDir, 'qbrt', 'openvr_api.dll');
 
 exports.install = () => {
   // Copy the qbrt xulapp to the target directory.
@@ -48,6 +52,25 @@ exports.install = () => {
   return pify(fs.ensureDir)(targetDir)
   .then(() => {
     return Promise.all(files.map(file => pify(fs.copy)(path.join(sourceDir, file), path.join(targetDir, file))));
+  }).then(() => {
+    return new Promise((resolve, reject) => {
+      if (!OPENVR_ENABLED) {
+        resolve();
+        return;
+      }
+
+      const openvrReq = request(OPENVR_DLL_URL)
+        .on('end', () => {
+          // `close()` is async, so call `cb` after closed.
+          openvrReq.close(() => {
+            fs.appendFileSync(path.join(targetDir, 'defaults', 'preferences', 'prefs.js'),
+              `\npref('gfx.vr.openvr-runtime', '${openvrPath}');\n`);
+            resolve();
+          });
+        })
+        .on('error', reject)
+        .pipe(fs.createWriteStream(openvrPath));
+    });
   });
 };
 
