@@ -70,7 +70,7 @@ const FILE_EXTENSIONS = {
 cli.spinner('  Installing runtime…');
 
 fs.ensureDirSync(DIST_DIR);
-const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `${packageJson.name}-`));
+const tempDir = require('fs').mkdtempSync(path.join(os.tmpdir(), `${packageJson.name}-`));
 const mountPoint = path.join(tempDir, 'volume');
 
 let filePath;
