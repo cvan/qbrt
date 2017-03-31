@@ -116,6 +116,16 @@ this.Runtime = {
     appWindow.addEventListener('close', onTargetClose);
   },
 
+  closeDevTools(target) {
+    const appWindow = 'outerWindowID' in target ? target.ownerGlobal : target;
+    // TODO: Close Dev Tools.
+  },
+
+  toggleDevTools(target) {
+    const appWindow = 'outerWindowID' in target ? target.ownerGlobal : target;
+    // TODO: Open/close Dev Tools.
+  },
+
 };
 
 function registerChromePrefix(appDir) {
