@@ -20,6 +20,11 @@ pref('devtools.debugger.prompt-connection', false);
 pref('devtools.debugger.remote-enabled', true);
 pref('devtools.selfxss.count', 5);
 pref('dom.mozBrowserFramesEnabled', true);
+pref('dom.vr.enabled', true);
+pref('dom.vr.openvr.enabled', true);
+pref('dom.vr.openvr.enabled', true);
+pref('dom.vr.require-gesture', false);
+pref('gfx.vr.openvr-runtime', 'c:\openvr_api.dll');
 pref('javascript.options.showInConsole', true);
 
 // Ideally, this would disable telemetry, but it doesn't actually work
