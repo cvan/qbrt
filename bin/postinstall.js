@@ -28,6 +28,7 @@ const packageJson = require('../package.json');
 const path = require('path');
 const pify = require('pify');
 const plist = require('simple-plist');
+const request = require('request');
 
 const DOWNLOAD_OS = (() => {
   switch (process.platform) {
@@ -54,23 +55,26 @@ const DOWNLOAD_OS = (() => {
   }
 })();
 
-const DOWNLOAD_URL = `https://download.mozilla.org/?product=firefox-nightly-latest-ssl&lang=en-US&os=${DOWNLOAD_OS}`;
 const DIST_DIR = path.join(__dirname, '..', 'dist');
+const DOWNLOAD_URL = `https://download.mozilla.org/?product=firefox-nightly-latest-ssl&lang=en-US&os=${DOWNLOAD_OS}`;
 const installDir = path.join(DIST_DIR, process.platform === 'darwin' ? 'Runtime.app' : 'runtime');
 const resourcesDir = process.platform === 'darwin' ? path.join(installDir, 'Contents', 'Resources') : installDir;
-const executableDir = process.platform === 'darwin' ? path.join(installDir, 'Contents', 'MacOS') : installDir;
 const browserJAR = path.join(resourcesDir, 'browser', 'omni.ja');
+const executableDir = process.platform === 'darwin' ? path.join(installDir, 'Contents', 'MacOS') : installDir;
 
 const FILE_EXTENSIONS = {
   'application/x-apple-diskimage': 'dmg',
   'application/zip': 'zip',
   'application/x-tar': 'tar.bz2',
 };
+const OPENVR_DLL_FILENAME = 'openvr_api.dll';
+const OPENVR_DLL_PATH = path.join(resourcesDir, 'qbrt', OPENVR_DLL_FILENAME);
+const OPENVR_DLL_URL = 'https://github.com/ValveSoftware/openvr/raw/v1.0.6/bin/win64/openvr_api.dll';
 
 cli.spinner('  Installing runtime…');
 
 fs.ensureDirSync(DIST_DIR);
-const tempDir = require('fs').mkdtempSync(path.join(os.tmpdir(), `${packageJson.name}-`));
+const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `${packageJson.name}-`));
 const mountPoint = path.join(tempDir, 'volume');
 
 let filePath;
@@ -178,29 +182,45 @@ new Promise((resolve, reject) => {
   }
 })
 .then(() => {
-  // Copy the qbrt xulapp to the target directory.
+  return new Promise((resolve, reject) => {
+    // Copy the qbrt xulapp to the target directory.
 
-  // TODO: move qbrt xulapp files into a separate source directory
-  // that we can copy in one fell swoop.
+    // TODO: move qbrt xulapp files into a separate source directory
+    // that we can copy in one fell swoop.
 
-  const sourceDir = path.join(__dirname, '..');
-  const targetDir = path.join(resourcesDir, 'qbrt');
+    const sourceDir = path.join(__dirname, '..');
+    const targetDir = path.join(resourcesDir, 'qbrt');
 
-  fs.mkdirSync(targetDir);
+    fs.mkdirSync(targetDir);
 
-  const appFiles = [
-    'application.ini',
-    'chrome',
-    'chrome.manifest',
-    'components',
-    'defaults',
-    'devtools.manifest',
-    'modules',
-  ];
+    const appFiles = [
+      'application.ini',
+      'chrome',
+      'chrome.manifest',
+      'components',
+      'defaults',
+      'devtools.manifest',
+      'modules',
+    ];
 
-  for (const file of appFiles) {
-    fs.copySync(path.join(sourceDir, file), path.join(targetDir, file));
-  }
+    for (const file of appFiles) {
+      fs.copySync(path.join(sourceDir, file), path.join(targetDir, file));
+    }
+
+    const req = request(OPENVR_DLL_URL)
+      .on('end', () => {
+        // `close()` is async, so call `cb` after closed.
+        req.close(() => {
+          fs.appendFileSync(path.join(targetDir, 'defaults', 'prefs.js'),
+            `pref('gfx.vr.openvr-runtime', '${OPENVR_DLL_PATH}`);
+          resolve();
+        });
+      })
+      .on('error', err => {
+        reject(err);
+      })
+      .pipe(fs.createWriteStream(OPENVR_DLL_PATH));
+  });
 })
 .then(() => {
   // Expand the browser xulapp's JAR archive so we can access its devtools.
