@@ -211,8 +211,8 @@ new Promise((resolve, reject) => {
       .on('end', () => {
         // `close()` is async, so call `cb` after closed.
         req.close(() => {
-          fs.appendFileSync(path.join(targetDir, 'defaults', 'prefs.js'),
-            `pref('gfx.vr.openvr-runtime', '${OPENVR_DLL_PATH}`);
+          fs.appendFileSync(path.join(targetDir, 'defaults', 'preferences', 'prefs.js'),
+            `\npref('gfx.vr.openvr-runtime', '${OPENVR_DLL_PATH}');\n`);
           resolve();
         });
       })
