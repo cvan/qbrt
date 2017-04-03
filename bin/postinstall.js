@@ -30,6 +30,18 @@ const pify = require('pify');
 const plist = require('simple-plist');
 const request = require('request');
 
+const DIST_DIR = path.join(__dirname, '..', 'dist');
+const installDir = path.join(DIST_DIR, process.platform === 'darwin' ? 'Runtime.app' : 'runtime');
+const resourcesDir = process.platform === 'darwin' ? path.join(installDir, 'Contents', 'Resources') : installDir;
+const browserJAR = path.join(resourcesDir, 'browser', 'omni.ja');
+const executableDir = process.platform === 'darwin' ? path.join(installDir, 'Contents', 'MacOS') : installDir;
+
+fs.ensureDirSync(DIST_DIR);
+const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `${packageJson.name}-`));
+console.log(tempDir);
+const mountPoint = path.join(tempDir, 'volume');
+
+const DOWNLOAD_LOCALE = 'en-US';
 const DOWNLOAD_OS = (() => {
   switch (process.platform) {
     case 'win32':
@@ -54,33 +66,100 @@ const DOWNLOAD_OS = (() => {
       return 'osx';
   }
 })();
-
-const DIST_DIR = path.join(__dirname, '..', 'dist');
-const DOWNLOAD_URL = `https://download.mozilla.org/?product=firefox-nightly-latest-ssl&lang=en-US&os=${DOWNLOAD_OS}`;
-const installDir = path.join(DIST_DIR, process.platform === 'darwin' ? 'Runtime.app' : 'runtime');
-const resourcesDir = process.platform === 'darwin' ? path.join(installDir, 'Contents', 'Resources') : installDir;
-const browserJAR = path.join(resourcesDir, 'browser', 'omni.ja');
-const executableDir = process.platform === 'darwin' ? path.join(installDir, 'Contents', 'MacOS') : installDir;
-
+// TODO: Move these to production server.
+const DOWNLOAD_INFO_URLS = {
+  linux: `https://archive.mozilla.org/pub/firefox/nightly/2017/04/2017-04-02-10-01-59-mozilla-central/firefox-55.0a1.${DOWNLOAD_LOCALE}.linux-i686.json`,
+  linux64: `https://archive.mozilla.org/pub/firefox/nightly/2017/04/2017-04-02-10-01-59-mozilla-central/firefox-55.0a1.${DOWNLOAD_LOCALE}.linux-x86_64.json`,
+  osx: `https://archive.mozilla.org/pub/firefox/nightly/2017/04/2017-04-02-03-02-02-mozilla-central/firefox-55.0a1.${DOWNLOAD_LOCALE}.mac.json`,
+  win: `https://archive.mozilla.org/pub/firefox/nightly/2017/04/2017-04-02-03-02-02-mozilla-central/firefox-55.0a1.${DOWNLOAD_LOCALE}.win32.json`,
+  win64: `https://archive.mozilla.org/pub/firefox/nightly/2017/04/2017-04-02-03-02-02-mozilla-central/firefox-55.0a1.${DOWNLOAD_LOCALE}.win64.json`,
+};
+const DOWNLOAD_INFO_URL = DOWNLOAD_INFO_URLS[DOWNLOAD_OS] || '';
+const DOWNLOAD_INFO_PATH = path.join(DIST_DIR, 'firefox.json');
+const DOWNLOAD_BIN_URLS = {
+  linux: `https://archive.mozilla.org/pub/firefox/nightly/2017/04/2017-04-02-10-01-59-mozilla-central/firefox-55.0a1.${DOWNLOAD_LOCALE}.linux-i686.tar.bz2`,
+  linux64: `https://archive.mozilla.org/pub/firefox/nightly/2017/04/2017-04-02-10-01-59-mozilla-central/firefox-55.0a1.${DOWNLOAD_LOCALE}.linux-x86_64.tar.bz2`,
+  mac: `https://archive.mozilla.org/pub/firefox/nightly/2017/04/2017-04-02-03-02-02-mozilla-central/firefox-55.0a1.${DOWNLOAD_LOCALE}.mac.dmg`,
+  win: `https://archive.mozilla.org/pub/firefox/nightly/2017/04/2017-04-02-03-02-02-mozilla-central/firefox-55.0a1.${DOWNLOAD_LOCALE}.win32.installer.exe`,
+  win64: `https://archive.mozilla.org/pub/firefox/nightly/2017/04/2017-04-02-03-02-02-mozilla-central/firefox-55.0a1.${DOWNLOAD_LOCALE}.win64.installer.exe`,
+};
+const DOWNLOAD_BIN_URL = DOWNLOAD_BIN_URLS[DOWNLOAD_OS] || `https://download.mozilla.org/?product=firefox-nightly-latest-ssl&lang=${DOWNLOAD_LOCALE}&os=${DOWNLOAD_OS}`;
 const FILE_EXTENSIONS = {
   'application/x-apple-diskimage': 'dmg',
   'application/zip': 'zip',
   'application/x-tar': 'tar.bz2',
 };
+const OPENVR_ENABLED = true;
 const OPENVR_DLL_FILENAME = 'openvr_api.dll';
 const OPENVR_DLL_PATH = path.join(resourcesDir, 'qbrt', OPENVR_DLL_FILENAME);
 const OPENVR_DLL_URL = 'https://github.com/ValveSoftware/openvr/raw/v1.0.6/bin/win64/openvr_api.dll';
 
-cli.spinner('  Installing runtime…');
+cli.spinner('  Setting up runtime…');
 
-fs.ensureDirSync(DIST_DIR);
-const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `${packageJson.name}-`));
-const mountPoint = path.join(tempDir, 'volume');
-
+let currentFirefoxInfo;
 let filePath;
 let fileStream;
 
 new Promise((resolve, reject) => {
+  cli.spinner('  Checking runtime…');
+
+  if (DOWNLOAD_INFO_URL) {
+    fs.readFile(DOWNLOAD_INFO_PATH, (error, data) => {
+      if (error) {
+        // throw error;
+        console.warn(`  Error: ${error}`);
+        // resolve();
+        // return;
+      }
+
+      const oldFirefoxInfo = JSON.parse(data || '{}');
+
+      request(DOWNLOAD_INFO_URL, (error, response, body) => {
+        if (error) {
+          // throw error;
+          console.warn(`  Error: ${error}`);
+          resolve();
+          // return;
+        }
+
+        currentFirefoxInfo = JSON.parse(body);
+
+        if (currentFirefoxInfo.buildid === oldFirefoxInfo.buildid &&
+            currentFirefoxInfo.target_alias === oldFirefoxInfo.target_alias) {
+          resolve(true);
+          return;
+        }
+
+        // Continue to download.
+        resolve();
+      });
+    });
+  }
+  else {
+    resolve();
+  }
+})
+.then((isRuntimeUpToDate) => {
+  if (isRuntimeUpToDate) {
+    cli.spinner(chalk.green.bold('✓ ') + `Checking runtime… done! Already using latest version (build ID: ${currentFirefoxInfo.buildid}; platform: ${currentFirefoxInfo.target_alias}).`,
+      currentFirefoxInfo, true);
+    return Promise.resolve();
+  }
+  else {
+    cli.spinner(chalk.green.bold('✓ ') + `Checking runtime… done! New version available for download (build ID: ${currentFirefoxInfo.buildid}; platform: ${currentFirefoxInfo.target_alias}).`,
+      currentFirefoxInfo, true);
+    return downloadRuntime();
+  }
+})
+.then(installRuntime)
+.catch(error => {
+  cli.spinner(chalk.red.bold('✗ ') + 'Checking runtime… failed!', true);
+  console.error(`  Error: ${error}`);
+});
+
+var downloadRuntime = () => new Promise((resolve, reject) => {
+  cli.spinner('  Downloading runtime…');
+
   function download(url) {
     https.get(url, function(response) {
       if (response.headers.location) {
@@ -98,7 +177,7 @@ new Promise((resolve, reject) => {
       }
     }).on('error', reject);
   }
-  download(DOWNLOAD_URL);
+  download(DOWNLOAD_BIN_URL);
 })
 .then((response) => {
   const extension = FILE_EXTENSIONS[response.headers['content-type']];
@@ -107,11 +186,29 @@ new Promise((resolve, reject) => {
   response.pipe(fileStream);
 
   return new Promise((resolve, reject) => {
-    fileStream.on('finish', resolve);
+    fileStream.on('finish', () => {
+      console.log('\n\n\n', currentFirefoxInfo);
+      if (currentFirefoxInfo) {
+        fs.writeFile(DOWNLOAD_INFO_PATH, JSON.stringify(currentFirefoxInfo, null, 2) + '\n');
+      }
+      resolve();
+    });
     response.on('error', reject);
   });
+}).then(() => {
+  cli.spinner(chalk.green.bold('✓ ') + 'Downloading runtime… done!', true);
 })
-.then(() => {
+.catch(error => {
+  cli.spinner(chalk.red.bold('✗ ') + 'Downloading runtime… failed!', true);
+  console.error(`  Error: ${error}`);
+  if (fileStream) {
+    fileStream.end();
+  }
+});
+
+var installRuntime = new Promise(() => {
+  cli.spinner('  Installing runtime…');
+
   if (process.platform === 'win32') {
     const source = filePath;
     const destination = DIST_DIR;
@@ -207,18 +304,21 @@ new Promise((resolve, reject) => {
       fs.copySync(path.join(sourceDir, file), path.join(targetDir, file));
     }
 
-    const req = request(OPENVR_DLL_URL)
+    if (!OPENVR_ENABLED) {
+      resolve();
+      return;
+    }
+
+    const openvrReq = request(OPENVR_DLL_URL)
       .on('end', () => {
         // `close()` is async, so call `cb` after closed.
-        req.close(() => {
+        openvrReq.close(() => {
           fs.appendFileSync(path.join(targetDir, 'defaults', 'preferences', 'prefs.js'),
             `\npref('gfx.vr.openvr-runtime', '${OPENVR_DLL_PATH}');\n`);
           resolve();
         });
       })
-      .on('error', err => {
-        reject(err);
-      })
+      .on('error', reject)
       .pipe(fs.createWriteStream(OPENVR_DLL_PATH));
   });
 })
@@ -280,10 +380,10 @@ new Promise((resolve, reject) => {
   }
 })
 .then(() => {
-  cli.spinner(chalk.green.bold('✓ ') + 'Installing runtime… done!', true);
+  cli.spinner(chalk.green.bold('✓ ') + 'Setting up runtime… done!', true);
 })
 .catch(error => {
-  cli.spinner(chalk.red.bold('✗ ') + 'Installing runtime… failed!', true);
+  cli.spinner(chalk.red.bold('✗ ') + 'Setting up runtime… failed!', true);
   console.error(`  Error: ${error}`);
   if (fileStream) {
     fileStream.end();
