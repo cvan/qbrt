@@ -21,7 +21,7 @@ pref('devtools.debugger.remote-enabled', true);
 pref('devtools.selfxss.count', 5);
 pref('dom.mozBrowserFramesEnabled', true);
 pref('dom.vr.enabled', true);
-pref('dom.vr.openvr.enabled', true);
+pref('dom.vr.oculus.enabled', true);
 pref('dom.vr.openvr.enabled', true);
 pref('dom.vr.require-gesture', false);
 pref('gfx.vr.openvr-runtime', 'c:\openvr_api.dll');
