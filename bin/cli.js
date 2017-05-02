@@ -131,6 +131,10 @@ function runApp() {
 
   if (options.debug) {
     switch (process.platform) {
+      case 'win32':
+        console.error('The --debug option is not yet supported on Windows.');
+        process.exit(1);
+        break;
       case 'darwin':
         executableArgs.unshift(executable, '--');
         executable = 'lldb';
