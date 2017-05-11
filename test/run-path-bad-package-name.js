@@ -19,7 +19,6 @@
 // Polyfill Promise.prototype.finally().
 require('promise.prototype.finally').shim();
 
-const fileURL = require('file-url');
 const path = require('path');
 const spawn = require('child_process').spawn;
 const tap = require('tap');
@@ -27,40 +26,33 @@ const tap = require('tap');
 let exitCode = 0;
 
 new Promise((resolve, reject) => {
-  const mainURL = fileURL(path.resolve('test', 'hello-world', 'main.html'));
-  const outputRegex = /opened (.*)test\/hello-world\/main\.html in new window/;
-  const child = spawn('node', [ path.join('bin', 'cli.js'), 'run', mainURL ]);
+  // Paths are relative to the top-level directory in which `npm test` is run.
+  const child = spawn('node', [ path.join('bin', 'cli.js'), 'run', 'test/hello-world-bad-package-name/' ]);
+  const outputRegex = /Error: Invalid name: "hello world"/;
 
   let totalOutput = '';
+  let totalError = '';
   let quitting = false;
+
   child.stdout.on('data', data => {
     const output = data.toString('utf8');
-    totalOutput += output;
-    console.log(output.trim());
+    console.log(output);
+    totalOutput += output.trim();
+  });
 
-    if (outputRegex.test(totalOutput) && !quitting) {
-      // Now that the app has output the data we were looking for,
-      // kill the app.  We assert that the output contains the data
-      // after the app finishes dying, since eventually the app
-      // will quit itself instead of relying on us to kill it.
+  child.stderr.on('data', data => {
+    const error = data.toString('utf8');
+    console.error(error);
+    totalError += error.trim();
+    if (outputRegex.test(totalError) && !quitting) {
       child.kill('SIGINT');
       quitting = true;
     }
   });
 
-  child.stderr.on('data', data => {
-    console.error(data.toString('utf8').trim());
-  });
-
-  child.on('exit', (code, signal) => {
-    tap.false(outputRegex.test(totalOutput), 'output confirms page opened');
-
-    if (process.platform === 'win32') {
-      tap.equal(signal, 'SIGINT', 'app exited with SIGINT');
-    }
-    else {
-      tap.equal(code, 0, 'app exited with success code');
-    }
+  child.on('exit', code => {
+    tap.true(outputRegex.test(totalError), 'output confirms `package.json` contains an invalid name');
+    tap.equal(code, 1, 'app exited with error code');
   });
 
   child.on('close', (code, signal) => {

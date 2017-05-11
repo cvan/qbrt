@@ -26,9 +26,11 @@ const commandLineCommands = require('command-line-commands');
 const commandLineUsage = require('command-line-usage');
 const fs = require('fs-extra');
 const os = require('os');
+const normalizePackageData = require('normalize-package-data');
 const packageJson = require('../package.json');
 const path = require('path');
 const pify = require('pify');
+const readPkg = require('read-pkg');
 const spawn = require('child_process').spawn;
 
 const distDir = path.join(__dirname, '..', 'dist', process.platform);
@@ -94,79 +96,94 @@ function runApp() {
 
   const shellDir = path.join(__dirname, '..', 'shell');
   const appDir = fs.existsSync(options.path) ? path.resolve(options.path) : shellDir;
-  const appPackageJson = require(path.join(appDir, 'package.json'));
-  const mainEntryPoint = path.join(appDir, appPackageJson.main || 'index.js');
 
-  // Args like 'app', 'new-instance', and 'profile' are handled by nsAppRunner,
-  // which supports uni-dash (-foo), duo-dash (--foo), and slash (/foo) variants
-  // (the latter only on Windows).
-  //
-  // But args like 'aqq' and 'jsdebugger' are handled by nsCommandLine methods,
-  // which don't support duo-dash arguments on Windows. So, for maximal
-  // compatibility (and minimal complexity, modulo this over-long explanation),
-  // we always pass uni-dash args to the runtime.
-  //
-  // Per nsBrowserApp, the 'app' flag always needs to be the first in the list.
+  const appPackageJsonFile = path.join(appDir, 'package.json');
 
-  let executableArgs = [
-    '-app', applicationIni,
-    '-profile', profileDir,
-    // TODO: figure out why we need 'new-instance' for it to work.
-    '-new-instance',
-    '-aqq', mainEntryPoint,
-    ...(options._unknown || []),
-  ];
+  cli.spinner(`  Reading ${appPackageJsonFile} …`);
 
-  if (appDir === shellDir) {
-    executableArgs.push(options.path);
-  }
+  readProjectMetadata(appPackageJsonFile, function transformer(appPackageJson) {
+    // First try `main` (Electron), then try `bin` (pkg), and finally fall back to `index.js`.
+    appPackageJson.main = appPackageJson.main || appPackageJson.bin || 'index.js';
+    return appPackageJson;
+  })
+  .then(appPackageJson => appPackageJson, error => {
+    cli.spinner(chalk.red.bold('✗ ') + `Reading ${appPackageJsonFile} … failed!`, true);
+    console.error(error);
+    process.exit(1);
+  })
+  .then(appPackageJson => {
+    const mainEntryPoint = path.join(appDir, appPackageJson.main);
 
-  if (options.jsdebugger) {
-    executableArgs.push('-jsdebugger');
-  }
-  if (options['wait-for-jsdebugger']) {
-    executableArgs.push('-wait-for-jsdebugger');
-  }
+    // Args like 'app', 'new-instance', and 'profile' are handled by nsAppRunner,
+    // which supports uni-dash (-foo), duo-dash (--foo), and slash (/foo) variants
+    // (the latter only on Windows).
+    //
+    // But args like 'aqq' and 'jsdebugger' are handled by nsCommandLine methods,
+    // which don't support duo-dash arguments on Windows. So, for maximal
+    // compatibility (and minimal complexity, modulo this over-long explanation),
+    // we always pass uni-dash args to the runtime.
+    //
+    // Per nsBrowserApp, the 'app' flag always needs to be the first in the list.
 
-  const spawnOptions = {};
+    let executableArgs = [
+      '-app', applicationIni,
+      '-profile', profileDir,
+      // TODO: figure out why we need 'new-instance' for it to work.
+      '-new-instance',
+      '-aqq', mainEntryPoint,
+      ...(options._unknown || []),
+    ];
 
-  if (options.debug) {
-    switch (process.platform) {
-      case 'win32':
-        console.error('The --debug option is not yet supported on Windows.');
-        process.exit(1);
-        break;
-      case 'darwin':
-        executableArgs.unshift(executable, '--');
-        executable = 'lldb';
-        break;
-      case 'linux':
-        executableArgs.unshift('--args', executable);
-        executable = 'gdb';
-        break;
+    if (appDir === shellDir) {
+      executableArgs.push(options.path);
     }
-    spawnOptions.stdio = 'inherit';
-  }
 
-  const child = spawn(executable, executableArgs, spawnOptions);
+    if (options.jsdebugger) {
+      executableArgs.push('-jsdebugger');
+    }
+    if (options['wait-for-jsdebugger']) {
+      executableArgs.push('-wait-for-jsdebugger');
+    }
 
-  // In theory, we should be able to specify the stdio: 'inherit' option
-  // when spawning the child to forward its output to our stdout/err streams.
-  // But that doesn't work on Windows in a MozillaBuild console.
-  if (!options.debug) {
-    child.stdout.on('data', data => process.stdout.write(data));
-    child.stderr.on('data', data => process.stderr.write(data));
-  }
+    const spawnOptions = {};
 
-  child.on('close', code => {
-    fs.removeSync(profileDir);
-    process.exit(code);
-  });
+    if (options.debug) {
+      switch (process.platform) {
+        case 'win32':
+          console.error('The --debug option is not yet supported on Windows.');
+          process.exit(1);
+          break;
+        case 'darwin':
+          executableArgs.unshift(executable, '--');
+          executable = 'lldb';
+          break;
+        case 'linux':
+          executableArgs.unshift('--args', executable);
+          executable = 'gdb';
+          break;
+      }
+      spawnOptions.stdio = 'inherit';
+    }
 
-  process.on('SIGINT', () => {
-    // If we get a SIGINT, then kill our child process.  Tests send us
-    // this signal, as might the user from a terminal window invocation.
-    child.kill('SIGINT');
+    const child = spawn(executable, executableArgs, spawnOptions);
+    // In theory, we should be able to specify the stdio: 'inherit' option
+    // when spawning the child to forward its output to our stdout/err streams.
+    // But that doesn't work on Windows in a MozillaBuild console.
+    if (!options.debug) {
+      child.stdout.on('data', data => process.stdout.write(data));
+      child.stderr.on('data', data => process.stderr.write(data));
+    }
+
+    child.on('close', code => {
+      fs.removeSync(profileDir);
+      process.exit(code);
+    });
+
+    process.on('SIGINT', () => {
+      // If we get a SIGINT, then kill our child process.  Tests send us
+      // this signal, as might the user from a terminal window invocation.
+      child.kill('SIGINT');
+    });
   });
 }
 
@@ -177,20 +194,42 @@ function packageApp() {
   const options = commandLineArgs(optionDefinitions, { argv: argv });
   const shellDir = path.join(__dirname, '..', 'shell');
   const appSourceDir = fs.existsSync(options.path) ? path.resolve(options.path) : shellDir;
-  const appPackageJson = require(path.join(appSourceDir, 'package.json'));
+  let appName;
+  let appTargetDir;
+  let appVersion;
+  let packageFile;
+  let stageDir;
 
-  // Check `productName` first since it's often used by Electron apps.
-  // TODO: ensure `appName` can be used as directory/file name.
-  const appName = appPackageJson.productName || appPackageJson.name;
-  const stageDirName = process.platform === 'darwin' ? `${appName}.app` : appName;
-  const packageFile = `${appName}.` + { win32: 'zip', darwin: 'dmg', linux: 'tgz' }[process.platform];
+  const appPackageJsonFile = path.join(appSourceDir, 'package.json');
 
-  let stageDir, appTargetDir;
+  cli.spinner(`  Reading ${appPackageJsonFile} …`);
 
-  cli.spinner(`  Packaging ${options.path} -> ${packageFile} …`);
-
-  pify(fs.mkdtemp)(path.join(os.tmpdir(), `${packageJson.name}-`))
+  readProjectMetadata(appPackageJsonFile, function transformer(appPackageJson) {
+    // `productName` is a key commonly used in `package.json` files of Electron apps.
+    appPackageJson.name = appPackageJson.productName || appPackageJson.name || path.basename(appSourceDir);
+    return appPackageJson;
+  })
+  .then(appPackageJson => {
+    cli.spinner(chalk.green.bold('✓ ') + `Reading ${appPackageJsonFile} … done!`, true);
+    return appPackageJson;
+  }, error => {
+    cli.spinner(chalk.red.bold('✗ ') + `Reading ${appPackageJsonFile} … failed!`, true);
+    console.error(error);
+    process.exit(1);
+  })
+  .then(appPackageJson => {
+    appName = appPackageJson.name;
+    appVersion = appPackageJson.version;
+    packageFile = `${appName}.` + (appVersion ? `v${appVersion}.` : '') +
+      { win32: 'zip', darwin: 'dmg', linux: 'tgz' }[process.platform];
+    cli.spinner(`  Packaging ${options.path} -> ${packageFile} …`);
+    return appPackageJson;
+  })
+  .then(appPackageJson => {
+    return pify(fs.mkdtemp)(path.join(os.tmpdir(), `${appPackageJson.name}-`));
+  })
   .then(tempDir => {
+    const stageDirName = process.platform === 'darwin' ? `${appName}.app` : appName;
     stageDir = path.join(tempDir, stageDirName);
     appTargetDir = process.platform === 'darwin' ?
       path.join(stageDir, 'Contents', 'Resources', 'webapp') :
@@ -225,9 +264,10 @@ function packageApp() {
     .then(() => {
       if (appSourceDir === shellDir) {
         const appTargetPackageJSONFile = path.join(appTargetDir, 'package.json');
-        const appTargetPackageJSON = require(appTargetPackageJSONFile);
-        appTargetPackageJSON.mainURL = options.path;
-        return pify(fs.writeFile)(appTargetPackageJSONFile, JSON.stringify(appTargetPackageJSON));
+        readProjectMetadata(appTargetPackageJSONFile).then((appTargetPackageJSON) => {
+          appTargetPackageJSON.mainURL = options.path;
+          return pify(fs.writeFile)(appTargetPackageJSONFile, JSON.stringify(appTargetPackageJSON));
+        });
       }
     });
   })
@@ -340,5 +380,60 @@ function updateRuntime() {
   })
   .finally(() => {
     process.exit(exitCode);
+  });
+}
+
+function readPackageJson(appPackageFile) {
+  return readPkg(appPackageFile);
+}
+
+function readProjectMetadata(appPackageFile, transformer) {
+  function transform(metadata) {
+    if (typeof transformer === 'function') {
+      transformer(metadata);
+    }
+    return metadata;
+  }
+
+  function removeUnused(metadata) {
+    // Remove unneeded keys that were added by `normalize-package-data`.
+    delete metadata._id;
+    if (metadata.readme === 'ERROR: No README data found!') {
+      delete metadata.readme;
+    }
+    return metadata;
+  }
+
+  return new Promise((resolve, reject) => {
+    console.log('………', appPackageFile);
+    fs.pathExists(appPackageFile, function (err, exists) {
+      if (err || !exists) {
+        resolve({});
+        return;
+      }
+
+      let packageError;
+
+      resolve(readPackageJson(appPackageFile));
+    });
+  })
+  .then(metadata => {
+    metadata = transform(metadata);
+    // `normalizePackageData` will throw if there are any errors
+    // (e.g., invalid values for `name` or `version`) in the
+    // `package.json` file.
+    try {
+      normalizePackageData(metadata, function (warning) {
+        cli.info(`${chalk.yellow.dim('⚠ Warning')}${chalk.dim(':')} ${appPackageFile}: ${warning}`);
+      });
+    } catch (error) {
+      throw error;
+    }
+    removeUnused(metadata);
+    return metadata;
+  })
+  .catch(error => {
+    console.error(error);
+    process.exit(1);
   });
 }
