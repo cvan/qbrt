@@ -30,7 +30,7 @@ const normalizePackageData = require('normalize-package-data');
 const packageJson = require('../package.json');
 const path = require('path');
 const pify = require('pify');
-const readPkg = require('read-pkg');
+const readPkgUp = require('read-pkg-up');
 const spawn = require('child_process').spawn;
 
 const distDir = path.join(__dirname, '..', 'dist', process.platform);
@@ -97,22 +97,23 @@ function runApp() {
   const shellDir = path.join(__dirname, '..', 'shell');
   const appDir = fs.existsSync(options.path) ? path.resolve(options.path) : shellDir;
 
-  const appPackageJsonFile = path.join(appDir, 'package.json');
+  cli.spinner(`  Reading package for ${appDir} …`);
 
-  cli.spinner(`  Reading ${appPackageJsonFile} …`);
-
-  readProjectMetadata(appPackageJsonFile, function transformer(appPackageJson) {
+  readProjectMetadata(appDir, function transformer(appPackageResult) {
     // First try `main` (Electron), then try `bin` (pkg), and finally fall back to `index.js`.
-    appPackageJson.main = appPackageJson.main || appPackageJson.bin || 'index.js';
-    return appPackageJson;
+    appPackageResult.pkg.main = appPackageResult.pkg.main || appPackageResult.pkg.bin || 'index.js';
+    return appPackageResult;
   })
-  .then(appPackageJson => appPackageJson, error => {
-    cli.spinner(chalk.red.bold('✗ ') + `Reading ${appPackageJsonFile} … failed!`, true);
+  .then(appPackageResult => {
+    cli.spinner(chalk.green.bold('✓ ') + `Reading package for ${appDir} … done!`, true);
+    return appPackageResult;
+  }, error => {
+    cli.spinner(chalk.red.bold('✗ ') + `Reading package for ${appDir} … failed!`, true);
     console.error(error);
     process.exit(1);
   })
-  .then(appPackageJson => {
-    const mainEntryPoint = path.join(appDir, appPackageJson.main);
+  .then(appPackageResult => {
+    const mainEntryPoint = path.join(appPackageResult.path, appPackageResult.pkg.main);
 
     // Args like 'app', 'new-instance', and 'profile' are handled by nsAppRunner,
     // which supports uni-dash (-foo), duo-dash (--foo), and slash (/foo) variants
@@ -200,24 +201,23 @@ function packageApp() {
   let packageFile;
   let stageDir;
 
-  const appPackageJsonFile = path.join(appSourceDir, 'package.json');
+  cli.spinner(`  Reading package for ${appSourceDir} …`);
 
-  cli.spinner(`  Reading ${appPackageJsonFile} …`);
-
-  readProjectMetadata(appPackageJsonFile, function transformer(appPackageJson) {
+  readProjectMetadata(appSourceDir, function transformer(appPackageResult) {
     // `productName` is a key commonly used in `package.json` files of Electron apps.
-    appPackageJson.name = appPackageJson.productName || appPackageJson.name || path.basename(appSourceDir);
-    return appPackageJson;
+    appPackageResult.pkg.name = appPackageResult.pkg.productName || appPackageResult.pkg.name || path.basename(appSourceDir);
+    return appPackageResult;
   })
-  .then(appPackageJson => {
-    cli.spinner(chalk.green.bold('✓ ') + `Reading ${appPackageJsonFile} … done!`, true);
-    return appPackageJson;
+  .then(appPackageResult => {
+    cli.spinner(chalk.green.bold('✓ ') + `Reading package for ${appSourceDir} … done!`, true);
+    return appPackageResult;
   }, error => {
-    cli.spinner(chalk.red.bold('✗ ') + `Reading ${appPackageJsonFile} … failed!`, true);
+    cli.spinner(chalk.red.bold('✗ ') + `Reading package for ${appSourceDir} … failed!`, true);
     console.error(error);
     process.exit(1);
   })
-  .then(appPackageJson => {
+  .then(appPackageResult => {
+    appPackageJson = appPackageResult.pkg;
     appName = appPackageJson.name;
     appVersion = appPackageJson.version;
     packageFile = `${appName}.` + (appVersion ? `v${appVersion}.` : '') +
@@ -264,10 +264,8 @@ function packageApp() {
     .then(() => {
       if (appSourceDir === shellDir) {
         const appTargetPackageJSONFile = path.join(appTargetDir, 'package.json');
-        readProjectMetadata(appTargetPackageJSONFile).then((appTargetPackageJSON) => {
-          appTargetPackageJSON.mainURL = options.path;
-          return pify(fs.writeFile)(appTargetPackageJSONFile, JSON.stringify(appTargetPackageJSON));
-        });
+        appPackageJson.pkg.mainURL = options.path;
+        return pify(fs.writeFile)(appTargetPackageJSONFile, JSON.stringify(appPackageJson.pkg));
       }
     });
   })
@@ -383,16 +381,12 @@ function updateRuntime() {
   });
 }
 
-function readPackageJson(appPackageFile) {
-  return readPkg(appPackageFile);
-}
-
-function readProjectMetadata(appPackageFile, transformer) {
-  function transform(metadata) {
+function readProjectMetadata(projectDir, transformer) {
+  function transform(result) {
     if (typeof transformer === 'function') {
-      transformer(metadata);
+      transformer(result);
     }
-    return metadata;
+    return result;
   }
 
   function removeUnused(metadata) {
@@ -404,33 +398,26 @@ function readProjectMetadata(appPackageFile, transformer) {
     return metadata;
   }
 
-  return new Promise((resolve, reject) => {
-    console.log('………', appPackageFile);
-    fs.pathExists(appPackageFile, function (err, exists) {
-      if (err || !exists) {
-        resolve({});
-        return;
-      }
+  return readPkgUp({cwd: projectDir}).then(result => {
+    let metadata = result.pkg;
+    let packageJsonFile = result.path;
 
-      let packageError;
+    metadata = transform(result);
 
-      resolve(readPackageJson(appPackageFile));
-    });
-  })
-  .then(metadata => {
-    metadata = transform(metadata);
     // `normalizePackageData` will throw if there are any errors
     // (e.g., invalid values for `name` or `version`) in the
     // `package.json` file.
     try {
       normalizePackageData(metadata, function (warning) {
-        cli.info(`${chalk.yellow.dim('⚠ Warning')}${chalk.dim(':')} ${appPackageFile}: ${warning}`);
+        cli.info(`${chalk.yellow.dim('⚠ Warning')}${chalk.dim(':')} ${packageJsonFile}: ${warning}`);
       });
     } catch (error) {
       throw error;
     }
-    removeUnused(metadata);
-    return metadata;
+
+    result.pkg = removeUnused(metadata);
+
+    return result;
   })
   .catch(error => {
     console.error(error);
