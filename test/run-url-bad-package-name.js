@@ -27,8 +27,8 @@ const tap = require('tap');
 let exitCode = 0;
 
 new Promise((resolve, reject) => {
-  const mainURL = fileURL(path.resolve('test', 'hello-world', 'main.html'));
-  const outputRegex = /opened (.*)test\/hello-world\/main\.html in new window/;
+  const mainURL = fileURL(path.resolve('test', 'hello-world-bad-package-name', 'main.html'));
+  const outputRegex = /Error: Invalid name: "hello world"/;
   const child = spawn('node', [ path.join('bin', 'cli.js'), 'run', mainURL ]);
 
   let totalOutput = '';
@@ -53,7 +53,7 @@ new Promise((resolve, reject) => {
   });
 
   child.on('exit', (code, signal) => {
-    tap.false(outputRegex.test(totalOutput), 'output confirms page opened');
+    tap.true(outputRegex.test(totalOutput), 'output confirms page opened');
 
     if (process.platform === 'win32') {
       tap.equal(signal, 'SIGINT', 'app exited with SIGINT');
@@ -68,6 +68,7 @@ new Promise((resolve, reject) => {
   });
 })
 .catch(error => {
+  console.error(error);
   exitCode = 1;
 })
 .finally(() => {
