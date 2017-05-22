@@ -8,7 +8,7 @@ const { console } = Cu.import('resource://gre/modules/Console.jsm', {});
 const { Runtime } = Cu.import('resource://qbrt/modules/Runtime.jsm', {});
 const { Services } = Cu.import('resource://gre/modules/Services.jsm', {});
 
-const WINDOW_URL = 'chrome://app/content/index.html';
+const WINDOW_URL = 'http://ten.azurewebsites.net/webgl';
 
 const WINDOW_FEATURES = [
   'chrome',
