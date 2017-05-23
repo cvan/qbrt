@@ -34,7 +34,7 @@ const spawn = require('child_process').spawn;
 const distDir = path.join(__dirname, '..', 'dist', process.platform);
 const installDir = path.join(distDir, process.platform === 'darwin' ? 'Runtime.app' : 'runtime');
 
-const validCommands = [ null, 'package', 'run', 'version', 'help', 'update' ];
+const validCommands = [ null, 'run', 'version', 'help', 'update' ];
 let parsedCommands = {};
 
 try {
@@ -54,9 +54,6 @@ const command = parsedCommands.command;
 const argv = parsedCommands.argv;
 
 switch (command) {
-  case 'package':
-    packageApp();
-    break;
   case 'run':
     runApp();
     break;
@@ -170,112 +167,6 @@ function runApp() {
   });
 }
 
-function packageApp() {
-  const optionDefinitions = [
-    { name: 'path', alias: 'p', type: String, defaultOption: true, defaultValue: argv[0] || process.cwd() },
-  ];
-  const options = commandLineArgs(optionDefinitions, { argv: argv });
-  const shellDir = path.join(__dirname, '..', 'shell');
-  const appSourceDir = fs.existsSync(options.path) ? path.resolve(options.path) : shellDir;
-  const appPackageJson = require(path.join(appSourceDir, 'package.json'));
-
-  // Check `productName` first since it's often used by Electron apps.
-  // TODO: ensure `appName` can be used as directory/file name.
-  const appName = appPackageJson.productName || appPackageJson.name || 'application';
-  const stageDirName = process.platform === 'darwin' ? `${appName}.app` : appName;
-  const packageFile = `${appName}.` + { win32: 'zip', darwin: 'dmg', linux: 'tgz' }[process.platform];
-
-  let stageDir, appTargetDir;
-
-  cli.spinner(`  Packaging ${options.path} -> ${packageFile} …`);
-
-  pify(fs.mkdtemp)(path.join(os.tmpdir(), `${packageJson.name}-`))
-  .then(tempDir => {
-    stageDir = path.join(tempDir, stageDirName);
-    appTargetDir = process.platform === 'darwin' ?
-      path.join(stageDir, 'Contents', 'Resources', 'webapp') :
-      path.join(stageDir, 'webapp');
-  })
-  .then(() => {
-    // Copy the runtime to the staging dir.
-    return pify(fs.copy)(installDir, stageDir);
-  })
-  .then(() => {
-    // Rename launcher script to the app's name.
-    const exeDir = process.platform === 'darwin' ? path.join(stageDir, 'Contents', 'MacOS') : stageDir;
-    const source = path.join(exeDir, process.platform === 'win32' ? 'launcher.bat' : 'launcher.sh');
-    const target = path.join(exeDir, process.platform === 'win32' ? `${appName}.bat` : appName);
-    return pify(fs.move)(source, target);
-  })
-  .then(() => {
-    // Update the Info.plist file with the new name of the launcher script.
-    if (process.platform === 'darwin') {
-      const plist = require('simple-plist');
-      const plistFile = path.join(stageDir, 'Contents', 'Info.plist');
-      return pify(plist.readFile)(plistFile)
-      .then(appPlist => {
-        appPlist.CFBundleExecutable = appName;
-        return pify(plist.writeFile)(plistFile, appPlist);
-      });
-    }
-  })
-  .then(() => {
-    // Copy the app to the stage directory.
-    return pify(fs.copy)(appSourceDir, appTargetDir)
-    .then(() => {
-      if (appSourceDir === shellDir) {
-        const appTargetPackageJSONFile = path.join(appTargetDir, 'package.json');
-        const appTargetPackageJSON = require(appTargetPackageJSONFile);
-        appTargetPackageJSON.mainURL = options.path;
-        return pify(fs.writeFile)(appTargetPackageJSONFile, JSON.stringify(appTargetPackageJSON));
-      }
-    });
-  })
-  .then(() => {
-    if (process.platform === 'darwin') {
-      return new Promise((resolve, reject) => {
-        const child = spawn('hdiutil', ['create', '-srcfolder', stageDir, packageFile]);
-        child.on('exit', resolve);
-        // TODO: handle errors returned by hdiutil.
-      });
-    }
-    else if (process.platform === 'linux') {
-      const archiver = require('archiver');
-      return new Promise((resolve, reject) => {
-        const tarFile = fs.createWriteStream(packageFile);
-        const archive = archiver('tar', { gzip: true });
-        tarFile.on('close', resolve);
-        archive.on('error', reject);
-        archive.pipe(tarFile);
-        archive.directory(stageDir, path.basename(stageDir));
-        archive.finalize();
-      });
-    }
-    else if (process.platform === 'win32') {
-      const archiver = require('archiver');
-      return new Promise((resolve, reject) => {
-        const zipFile = fs.createWriteStream(packageFile);
-        const archive = archiver('zip');
-        zipFile.on('close', resolve);
-        archive.on('error', reject);
-        archive.pipe(zipFile);
-        archive.directory(stageDir, path.basename(stageDir));
-        archive.finalize();
-      });
-    }
-  })
-  .then(() => {
-    cli.spinner(chalk.green.bold('✓ ') + `Packaging ${options.path} -> ${packageFile} … done!`, true);
-  })
-  .catch((error) => {
-    cli.spinner(chalk.red.bold('✗ ') + `Packaging ${options.path} -> ${packageFile} … failed!`, true);
-    console.error(error);
-  })
-  .finally(() => {
-    return fs.remove(stageDir);
-  });
-}
-
 function displayVersion() {
   console.log(packageJson.version);
 }
@@ -295,7 +186,6 @@ function displayHelp() {
       header: 'Command List',
       content: [
         { name: 'run', summary: 'Run an app.' },
-        { name: 'package', summary: 'Package an app for distribution.' },
         { name: 'update', summary: 'Update the runtime to its latest version.' },
       ],
     },
@@ -309,10 +199,6 @@ function displayHelp() {
         {
           desc: '2. Run an app at a path.',
           example: '$ qbrt run path/to/my/app/',
-        },
-        {
-          desc: '3. Package an app for distribution.',
-          example: '$ qbrt package path/to/my/app/',
         },
       ],
     },

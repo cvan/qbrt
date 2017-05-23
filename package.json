@@ -9,7 +9,7 @@
   "engines": {
     "node": ">=5.10.0"
   },
-  "bin": "./bin/cli.js",
+  "bin": "./bin/run.js",
   "scripts": {
     "postinstall": "node ./bin/postinstall.js",
     "start": "node ./bin/cli.js",
@@ -32,6 +32,15 @@
   "devDependencies": {
     "eslint": "^3.16.1",
     "file-url": "^2.0.2",
+    "npm": "^4.6.1",
     "tap": "^10.3.0"
+  },
+  "pkg": {
+    "scripts": [
+      "bin/*"
+    ],
+    "assets": [
+      "shell/*"
+    ]
   }
 }
